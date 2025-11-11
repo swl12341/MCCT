@@ -6,6 +6,32 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import confusion_matrix, classification_report, roc_auc_score
 
+
+def select_peak_predictions(probs, preds):
+    probs = np.asarray(probs).reshape(-1)
+    preds = np.asarray(preds).reshape(-1)
+
+    filtered = np.zeros_like(preds)
+    start = None
+
+    for idx, label in enumerate(preds):
+        if label == 1:
+            if start is None:
+                start = idx
+        else:
+            if start is not None:
+                segment = slice(start, idx)
+                best_idx = segment.start + np.argmax(probs[segment])
+                filtered[best_idx] = 1
+                start = None
+
+    if start is not None:
+        segment = slice(start, len(preds))
+        best_idx = segment.start + np.argmax(probs[segment])
+        filtered[best_idx] = 1
+
+    return filtered
+
 def balance_validation_data(X, y):
     X = np.array(X)
     y = np.array(y)
@@ -19,7 +45,16 @@ def balance_validation_data(X, y):
     return X[combined_idx], y[combined_idx]
 
 
-def evaluate_model(model, data_loader, device, output_dir=None, is_best=False, verbose=False, tag="val", balance=False):
+def evaluate_model(model,
+                   data_loader,
+                   device,
+                   output_dir=None,
+                   is_best=False,
+                   verbose=False,
+                   tag="val",
+                   balance=False,
+                   return_details=False,
+                   enforce_peak=False):
     model.eval()
     all_preds, all_labels, all_probs = [], [], []
     with torch.no_grad():
@@ -33,9 +68,9 @@ def evaluate_model(model, data_loader, device, output_dir=None, is_best=False, v
             all_labels.extend(y_batch.cpu().numpy())
             all_probs.extend(probs)
 
-    all_preds = np.array(all_preds)
-    all_labels = np.array(all_labels)
-    all_probs = np.array(all_probs)
+    all_preds = np.array(all_preds).reshape(-1)
+    all_labels = np.array(all_labels).reshape(-1)
+    all_probs = np.array(all_probs).reshape(-1)
 
     if balance:
         features = np.stack([all_probs, all_preds], axis=1)
@@ -44,11 +79,14 @@ def evaluate_model(model, data_loader, device, output_dir=None, is_best=False, v
         all_preds = X_bal[:, 1].astype(int)
         all_labels = y_bal
 
-    cm = confusion_matrix(all_labels, all_preds)
+    peak_preds = select_peak_predictions(all_probs, all_preds)
+    active_preds = peak_preds if enforce_peak else all_preds
+
+    cm = confusion_matrix(all_labels, active_preds)
     if verbose:
-        print(classification_report(all_labels, all_preds, digits=4))
+        print(classification_report(all_labels, active_preds, digits=4))
     auc = roc_auc_score(all_labels, all_probs)
-    acc = np.mean(all_preds == all_labels)
+    acc = np.mean(active_preds == all_labels)
 
     if is_best and output_dir is not None:
         plt.figure(figsize=(6, 5))
@@ -58,5 +96,15 @@ def evaluate_model(model, data_loader, device, output_dir=None, is_best=False, v
         plt.ylabel("True")
         plt.savefig(os.path.join(output_dir, f"confusion_matrix_best_{tag}.png"), dpi=600)
         plt.close()
+
+    if return_details:
+        details = {
+            "labels": all_labels,
+            "preds": all_preds,
+            "probs": all_probs,
+            "peak_preds": peak_preds,
+            "final_preds": active_preds
+        }
+        return acc, auc, details
 
     return acc, auc

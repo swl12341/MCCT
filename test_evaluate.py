@@ -77,34 +77,35 @@ def evaluate_test(model_path, test_mat_path, output_dir, test_set_name):
     test_loader  = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
     # 模型评估
-    test_acc, test_auc = evaluate_model(
+    test_acc, test_auc, test_details = evaluate_model(
         model, test_loader, device,
         output_dir=output_dir,
         is_best=False,
         verbose=True,
-        tag='test'
+        tag='test',
+        return_details=True,
+        enforce_peak=True
     )
 
-    # 收集预测结果
-    model.eval()
-    all_preds, all_probs, all_labels = [], [], []
-    with torch.no_grad():
-        for X_batch, y_batch in test_loader:
-            X_batch = X_batch.to(device)
-            outputs = model(X_batch)  # [B]
-            probs = torch.sigmoid(outputs).cpu().numpy()  # sigmoid概率
-            preds = (probs > 0.5).astype(int)
-            all_preds.extend(preds)
-            all_probs.extend(probs)
-            all_labels.extend(y_batch.numpy())
+    all_labels = test_details["labels"]
+    raw_preds = test_details["preds"]
+    peak_preds = test_details["peak_preds"]
+    final_preds = test_details["final_preds"]
+    all_probs = test_details["probs"]
+
+    # 输出置信度与对应的01结果
+    for idx, (prob, pred) in enumerate(zip(all_probs, final_preds)):
+        print(f"[TEST] Sample {idx:04d} -> Prob: {prob:.6f}, Pred: {pred}")
 
     # 保存为 .mat 文件
     result_mat = {
         "test_accuracy":     test_acc,
         "test_auc":          test_auc,
-        "true_labels":       np.array(all_labels),
-        "predicted_labels":  np.array(all_preds),
-        "predicted_probs":   np.array(all_probs)
+        "true_labels":           np.array(all_labels),
+        "predicted_labels_raw":  np.array(raw_preds),
+        "predicted_labels_peak": np.array(peak_preds),
+        "predicted_labels":      np.array(final_preds),
+        "predicted_probs":       np.array(all_probs)
     }
 
     for k, v in test_dataset.extra.items():
@@ -116,7 +117,7 @@ def evaluate_test(model_path, test_mat_path, output_dir, test_set_name):
 
     # 可视化
     viz_dir = os.path.join(output_dir, "visualizations")
-    plot_test_visualizations(all_labels, all_preds, all_probs, viz_dir)
+    plot_test_visualizations(all_labels, final_preds, all_probs, viz_dir)
     print(f"[INFO] 测试可视化已保存至: {viz_dir}")
 
 if __name__ == "__main__":
